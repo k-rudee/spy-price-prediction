@@ -1,0 +1,146 @@
+---
+title: "decision tree and random forest"
+---
+
+```{r}
+# clear environment
+rm(list = ls())
+set.seed(1)
+```
+
+```{r}
+# load packages
+library(car)
+library(dplyr)
+library(tidyquant)
+library(randomForest)
+library(tree)
+library(caret)
+```
+
+```{r}
+# load data
+SPY <- c('SPY') %>% tq_get(get = "stock.prices", from = "2013-01-01", to = "2024-02-29")
+GLD <- c('GLD') %>% tq_get(get = "stock.prices", from = "2013-01-01", to = "2024-02-29")
+CPI <- read.csv("CPI.csv")
+GDP <- read.csv("US GDP.csv")
+FED_rate <- read.csv("US FED Funds Rate.csv")
+Job_Openings <- read.csv("US Job Openings Total Nonfarm.csv")
+PCE <- read.csv("US PCE - Personal Consumption Expenditure.csv")
+Pop <- read.csv("US Population.csv")
+U_rate <- read.csv("US Unemployment Rate.csv")
+
+# data merge and cleaning
+# align data processing with the rest of the team
+data <- left_join(CPI, GDP, by = "DATE")
+data <- left_join(data, FED_rate, by = "DATE")
+data <- left_join(data, Job_Openings, by = "DATE")
+data <- left_join(data, PCE, by = "DATE")
+data <- left_join(data, Pop, by = "DATE")
+data <- left_join(data, U_rate, by = "DATE")
+data$Month <- format(as.Date(data$DATE), "%Y-%m")
+
+colnames(data)[2] <- "CPI"
+colnames(data)[3] <- "GDP"
+colnames(data)[4] <- "FEDRATE"
+colnames(data)[5] <- "JO"
+colnames(data)[6] <- "PCE"
+colnames(data)[7] <- "POP"
+colnames(data)[8] <- "UNRATE"
+colnames(data)[9] <- "MONTH"
+
+SPY$month <- format(as.Date(SPY$date), "%Y-%m")
+GLD$month <- format(as.Date(GLD$date), "%Y-%m")
+SPY_by_month <- group_by(SPY, month) %>% summarize(AVG_PRICE = mean(adjusted), AVG_VOLUME = mean(volume))
+colnames(SPY_by_month)[1] <- "MONTH"
+GLD_by_month <- group_by(GLD, month) %>% summarize(AVG_PRICE = mean(adjusted))
+colnames(GLD_by_month)[1] <- "MONTH"
+colnames(GLD_by_month)[2] <- "GLD_PRICE"
+
+data <- left_join(data, SPY_by_month, by = "MONTH")
+data <- left_join(data, GLD_by_month, by = "MONTH")
+
+data$GDP[1] <- mean(95.89, data$GDP[3])
+data$GDP[2] <- mean(95.89, data$GDP[3])
+data$GDP[118] <- data$GDP[117]
+data$GDP[119] <- data$GDP[117]
+data$GDP[120] <- data$GDP[117]
+
+for (i in seq(3,114, by=3)){
+  data$GDP[i+1] <- mean(data$GDP[i], data$GDP[i+3])
+  data$GDP[i+2] <- mean(data$GDP[i], data$GDP[i+3])  
+}
+
+# Remove Feb as data was not fully available
+data <- data[-121,]
+
+# Need to normalize the data as variables have very different ranges.
+# Function to normalize data
+normalize <- function(x) {
+  return((x - min(x)) / (max(x) - min(x)))
+}
+
+# Apply normalization to selected columns
+data_normalized <- as.data.frame(lapply(data[, c('CPI', 'GDP', 'FEDRATE', 'JO', 'PCE', 'POP', 'UNRATE', 'AVG_VOLUME', 'GLD_PRICE')], normalize))
+data_normalized <- cbind(data[, c('DATE', 'MONTH', 'AVG_PRICE')], data_normalized)
+head(data_normalized)
+tail(data_normalized)
+
+# split training, validation and test data
+mask_train = sample(nrow(data_normalized), size = floor(nrow(data_normalized) * 0.6))
+train = data_normalized[mask_train,] # training data set
+remaining = data_normalized[-mask_train, ]  # all rows except training
+mask_val = sample(nrow(remaining), size = floor(nrow(remaining)/2))
+validate = remaining[mask_val,]  # validation data set
+test = remaining[-mask_val, ] # test data set
+
+```
+
+```{r}
+# regression tree model
+spy_tree_model <- tree(AVG_PRICE ~ AVG_VOLUME+CPI+GDP+FEDRATE+JO+PCE+POP+UNRATE+GLD_PRICE, data = train)
+
+# summary of the model
+summary(spy_tree_model)
+
+# show the tree
+spy_tree_model$frame
+plot(spy_tree_model)
+text(spy_tree_model)
+
+# check performance of the model on validation data
+spy_tree_predict_val <- predict(spy_tree_model, validate[,c('AVG_VOLUME', 'CPI', 'GDP', 'FEDRATE', 'JO', 'PCE', 'POP', 'UNRATE', 'GLD_PRICE')])
+SST <- sum((validate$AVG_PRICE - mean(validate$AVG_PRICE))^2)
+SSE_tree_val <- sum((spy_tree_predict_val - validate$AVG_PRICE)^2)
+1 - SSE_tree_val/SST
+
+# check performance of the model on test data
+spy_tree_predict_test <- predict(spy_tree_model, test[,c('AVG_VOLUME', 'CPI', 'GDP', 'FEDRATE', 'JO', 'PCE', 'POP', 'UNRATE', 'GLD_PRICE')])
+SST <- sum((test$AVG_PRICE - mean(test$AVG_PRICE))^2)
+SSE_tree_test <- sum((spy_tree_predict_test - test$AVG_PRICE)^2)
+1 - SSE_tree_test/SST
+
+
+
+```
+
+
+```{r}
+# random forest model
+spy_rf_model <- randomForest(AVG_PRICE ~ AVG_VOLUME+CPI+GDP+FEDRATE+JO+PCE+POP+UNRATE+GLD_PRICE, data = train, importance = TRUE)
+
+# summary of the model
+summary(spy_rf_model)
+
+spy_rf_predict_val <- predict(spy_rf_model, validate[,c('AVG_VOLUME', 'CPI', 'GDP', 'FEDRATE', 'JO', 'PCE', 'POP', 'UNRATE', 'GLD_PRICE')])
+SST <- sum((validate$AVG_PRICE - mean(validate$AVG_PRICE))^2)
+SSE_rf_val <- sum((spy_rf_predict_val - validate$AVG_PRICE)^2)
+1 - SSE_rf_val/SST
+
+
+spy_rf_predict_test <- predict(spy_rf_model, test[,c('AVG_VOLUME', 'CPI', 'GDP', 'FEDRATE', 'JO', 'PCE', 'POP', 'UNRATE', 'GLD_PRICE')])
+SST <- sum((test$AVG_PRICE - mean(test$AVG_PRICE))^2)
+SSE_rf_test <- sum((spy_rf_predict_test - test$AVG_PRICE)^2)
+1 - SSE_rf_test/SST
+```
+

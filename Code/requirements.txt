@@ -1,0 +1,11 @@
+matplotlib
+statsmodels
+darts
+seaborn
+pandas==1.3.4
+numpy==1.21.4
+scikit-learn==1.0.1
+matplotlib==3.4.3
+yfinance==0.1.70
+tensorflow==2.6.0
+keras==2.6.0
